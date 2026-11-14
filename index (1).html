@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Pal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root{--navy:#1a1a5e;--pink:#e46fb8;--cyan:#5ff0f0;--ink:#0d0d33}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:var(--ink);color:#fff;font-family:'Press Start 2P',monospace;
+       display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:12px}
+  #stage{position:relative;width:min(96vw,960px);aspect-ratio:16/9;border:4px solid var(--navy);
+         box-shadow:0 0 0 4px #000,0 0 40px #e46fb866;overflow:hidden;background:#c85aa8}
+  canvas{position:absolute;inset:0;width:100%;height:100%}
+  #fg{image-rendering:pixelated}
+  #say{position:absolute;max-width:70%;text-align:center;font-size:clamp(8px,1.7vw,16px);line-height:1.6;
+       text-transform:uppercase;color:#fff;pointer-events:none;transform:translate(-50%,-100%);
+       text-shadow:-2px 0 var(--navy),2px 0 var(--navy),0 -2px var(--navy),0 2px var(--navy),
+                   -2px -2px var(--navy),2px 2px var(--navy),-2px 2px var(--navy),2px -2px var(--navy)}
+  #ui{width:min(96vw,960px);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  #talk{flex:1 1 260px;display:flex;gap:8px}
+  input{flex:1;min-width:0;font:inherit;font-size:11px;padding:12px;background:#12124a;color:#fff;
+        border:3px solid var(--cyan);outline:none}
+  input:focus{box-shadow:0 0 0 3px #5ff0f066}
+  button{font:inherit;font-size:10px;padding:12px 10px;background:var(--navy);color:#fff;
+         border:3px solid var(--cyan);cursor:pointer}
+  button:hover{background:#2a2a8e}
+  button:active{transform:translateY(2px)}
+  #pad{display:flex;gap:6px;flex-wrap:wrap}
+  small{font-size:8px;line-height:1.9;color:#bdb8ff;width:100%}
+  @media (prefers-reduced-motion:reduce){button:active{transform:none}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bg" width="960" height="540"></canvas>
+  <canvas id="fg" width="240" height="135"></canvas>
+  <div id="say"></div>
+</div>
+
+<div id="ui">
+  <form id="talk" autocomplete="off">
+    <input id="txt" maxlength="80" placeholder="Type something for her to say..." aria-label="What should she say?">
+    <button type="submit">SAY</button>
+  </form>
+  <div id="pad">
+    <button data-k="left" aria-label="Walk left">&lt;</button>
+    <button data-k="right" aria-label="Walk right">&gt;</button>
+    <button data-k="jump">JUMP</button>
+    <button data-k="wave">WAVE</button>
+    <button data-k="chute">CHUTE</button>
+  </div>
+  <small>Arrows / A D = walk &nbsp; Space = jump &nbsp; H = wave &nbsp; P = parachute &nbsp; T = type a message</small>
+</div>
+
+<script>
+const W=240,H=135,GROUND=112,SH=26;
+const fg=document.getElementById('fg'),ctx=fg.getContext('2d');
+const say=document.getElementById('say'),txt=document.getElementById('txt');
+
+/* ---------- background: pink binary-rain screen ---------- */
+(function(){
+  const b=document.getElementById('bg').getContext('2d');
+  let s=7;const rnd=()=>(s=(s*16807)%2147483647)/2147483647;
+  b.fillStyle='#d765b0';b.fillRect(0,0,960,540);
+  for(let i=0;i<26;i++){
+    const x=rnd()*960,y=rnd()*540,r=60+rnd()*140;
+    const g=b.createRadialGradient(x,y,0,x,y,r);
+    const purple=x>480||rnd()>.65;
+    g.addColorStop(0,purple?'rgba(80,50,170,.55)':'rgba(255,150,210,.4)');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    b.fillStyle=g;b.fillRect(x-r,y-r,r*2,r*2);
+  }
+  b.font='bold 9px monospace';b.textAlign='center';
+  for(let y=8;y<540;y+=10)for(let x=4;x<960;x+=8){
+    const t=x/960,q=rnd();
+    const c=t<.45?(q<.6?'D':q<.85?'0':'1'):t<.75?(q<.5?'0':q<.8?'1':'/'):(q<.4?'*':q<.7?'/':'0');
+    b.fillStyle=`rgba(255,255,255,${.35+rnd()*.35})`;
+    b.fillText(c,x,y);
+  }
+  for(let i=0;i<14;i++){b.fillStyle='rgba(255,255,255,.12)';b.fillRect(rnd()*900,rnd()*500,24,24)}
+})();
+
+/* ---------- sprite: head + torso (16 wide). legs/arms are drawn in code ---------- */
+const PAL={o:'#1a1a5e',h:'#c0584f',b:'#2fb5c9',s:'#f6f6f6',g:'#5ff0f0',t:'#1f9fb8',d:'#157a96',w:'#ffffff'};
+const BODY=[
+"......oooo......",
+".....ohhhho.....",
+"....ohhbbhho....",
+"...ohhhhhhhho...",
+"..ohhhhhhhhhho..",
+"..ohhhhhhhhhho..",
+"..ohgggssgggho..",
+"..ohgggssgggho..",
+"..osssssssssso..",
+"...osssssssso...",
+"....osssssso....",
+"....owwwwwwo....",
+"....ottddtto....",
+"....ottddtto....",
+"....ottddtto....",
+"....ottddtto....",
+"....ottttttto...".slice(0,16),
+"....oooooooo...."
+];
+function px(x,y,c){ctx.fillStyle=c;ctx.fillRect(x,y,1,1)}
+function rect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(x,y,w,h)}
+function drawBody(){
+  BODY.forEach((row,y)=>{for(let x=0;x<16;x++){const c=row[x];if(c&&c!=='.')px(x,y,PAL[c])}});
+  px(7,9,PAL.o);px(8,9,PAL.o); // little smile
+  px(6,8,'#ffffff');px(9,8,'#ffffff');
+}
+function arm(pts,hand){
+  pts.forEach(([x,y])=>rect(x-1,y-1,4,4,PAL.o));
+  rect(hand[0]-1,hand[1]-1,4,4,PAL.o);
+  pts.forEach(([x,y])=>rect(x,y,2,2,PAL.t));
+  rect(hand[0],hand[1],2,2,PAL.s);
+}
+function leg(x,len){
+  rect(x-1,18,4,len+2,PAL.o);rect(x,18,2,len,PAL.t);rect(x,18+len-1,2,1,PAL.d);
+}
+function canopy(){
+  for(let r=0;r<11;r++){
+    const hw=Math.round(15*Math.sqrt(1-Math.pow((10-r)/11.5,2)));
+    rect(8-hw,-21+r,hw*2,1,'#ffd9a0');
+    rect(8-hw-1,-21+r,1,1,'#7a2f3a');rect(8+hw,-21+r,1,1,'#7a2f3a');
+    if(r===0)rect(8-hw,-22,hw*2,1,'#7a2f3a');
+  }
+  rect(-7,-10,30,1,'#7a2f3a');
+  [[-6,-10,1,7],[22,-10,13,7],[3,-10,1,7],[13,-10,13,7]].forEach(([x1,y1,x2,y2])=>{
+    for(let i=0;i<=30;i++){px(Math.round(x1+(x2-x1)*i/30),Math.round(y1+(y2-y1)*i/30),'#e9d9ff')}
+  });
+}
+
+/* ---------- state ---------- */
+const P={x:120,y:GROUND-SH,vy:0,dir:1,mode:'idle',chute:false,wave:0,walking:false};
+let t=0;
+const keys={};
+
+function groundY(){return GROUND-SH}
+function onGround(){return P.y>=groundY()}
+
+function doJump(){if(onGround()&&!P.chute){P.vy=-3.6;P.wave=0}}
+function doWave(){if(onGround()){P.wave=170}}
+function doChute(){
+  if(onGround()){P.y=-40;P.vy=0;P.chute=true;P.wave=0}
+  else P.chute=!P.chute;
+}
+
+function update(){
+  t++;
+  const l=keys.left,r=keys.right;
+  P.walking=false;
+  if(l!==r){P.walking=true;P.dir=l?-1:1;P.x+=(l?-1:1)*(P.chute?.6:1.1);P.wave=0}
+  P.x=Math.max(14,Math.min(W-14,P.x));
+  if(P.chute){
+    P.vy=Math.min(P.vy+.03,.55);
+    P.x+=Math.sin(t/25)*.15;
+  }else P.vy+=.22;
+  P.y+=P.vy;
+  if(P.y>=groundY()){P.y=groundY();P.vy=0;P.chute=false}
+  if(P.wave>0)P.wave--;
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  const air=groundY()-P.y,sw=Math.max(4,14-air/6);
+  ctx.fillStyle='rgba(26,26,94,.35)';ctx.fillRect(Math.round(P.x-sw/2),GROUND+1,Math.round(sw),2);
+
+  const idle=!P.walking&&onGround()&&P.wave===0;
+  const bob=idle?Math.floor(t/35)%2:0;
+  ctx.save();
+  ctx.translate(Math.round(P.x),Math.round(P.y)+bob);
+  if(P.dir<0)ctx.scale(-1,1);
+  ctx.translate(-8,0);
+
+  if(P.chute){
+    canopy();
+    arm([[2,13],[1,11],[1,9]],[1,7]);
+    arm([[12,13],[13,11],[13,9]],[13,7]);
+    const sw2=Math.floor(t/20)%2;
+    leg(5,5+sw2);leg(9,6-sw2);
+  }else if(!onGround()){
+    arm([[2,13],[1,12],[0,10]],[0,8]);
+    arm([[12,13],[13,12],[14,10]],[14,8]);
+    leg(5,4);leg(9,5);
+  }else if(P.walking){
+    const f=Math.floor(t/8)%2,s=f?1:-1;
+    arm([[2,13],[2,15],[2+s,17]],[2+s,19]);
+    arm([[12,13],[12,15],[12-s,17]],[12-s,19]);
+    leg(5,f?6:4);leg(9,f?4:6);
+  }else if(P.wave>0){
+    const ax=Math.floor(t/10)%2?12:14;
+    arm([[2,13],[1,15],[3,17]],[4,17]);
+    arm([[12,13],[13,11],[ax,9]],[ax,7]);
+    leg(5,6);leg(9,6);
+  }else{
+    arm([[2,13],[1,15],[3,17]],[4,17]); // hand on hip
+    arm([[12,13],[12,15],[12,17]],[12,19]);
+    leg(5,6);leg(9,6);
+  }
+  drawBody();
+  ctx.restore();
+
+  const sx=P.x/W*100;
+  const top=(P.y+bob-(P.chute?27:5))/H*100;
+  say.style.left=Math.max(18,Math.min(82,sx))+'%';
+  say.style.top=Math.max(14,top)+'%';
+}
+
+/* ---------- speech ---------- */
+let typer=null,hider=null;
+function speak(msg){
+  clearInterval(typer);clearTimeout(hider);
+  msg=msg.trim();if(!msg){say.textContent='';return}
+  let i=0;say.textContent='';
+  typer=setInterval(()=>{say.textContent=msg.slice(0,++i);if(i>=msg.length)clearInterval(typer)},38);
+  hider=setTimeout(()=>say.textContent='',msg.length*38+3500);
+}
+
+/* ---------- input ---------- */
+const MAP={ArrowLeft:'left',a:'left',A:'left',ArrowRight:'right',d:'right',D:'right'};
+addEventListener('keydown',e=>{
+  if(document.activeElement===txt){if(e.key==='Escape')txt.blur();return}
+  if(MAP[e.key]){keys[MAP[e.key]]=true;e.preventDefault()}
+  else if(e.key===' '||e.key==='ArrowUp'||e.key==='w'||e.key==='W'){doJump();e.preventDefault()}
+  else if(e.key==='h'||e.key==='H')doWave();
+  else if(e.key==='p'||e.key==='P')doChute();
+  else if(e.key==='t'||e.key==='T'||e.key==='Enter'){txt.focus();e.preventDefault()}
+});
+addEventListener('keyup',e=>{if(MAP[e.key])keys[MAP[e.key]]=false});
+document.getElementById('talk').addEventListener('submit',e=>{
+  e.preventDefault();speak(txt.value);txt.value='';txt.blur();
+});
+document.querySelectorAll('#pad button').forEach(b=>{
+  const k=b.dataset.k;
+  const down=ev=>{ev.preventDefault();
+    if(k==='left'||k==='right')keys[k]=true;
+    else if(k==='jump')doJump();else if(k==='wave')doWave();else doChute()};
+  const up=()=>{if(k==='left'||k==='right')keys[k]=false};
+  b.addEventListener('pointerdown',down);
+  ['pointerup','pointerleave','pointercancel'].forEach(n=>b.addEventListener(n,up));
+});
+
+speak("Hello! I'm your pixel pal!");
+setTimeout(doWave,300);
+(function loop(){update();render();requestAnimationFrame(loop)})();
+</script>
+</body>
+</html>
